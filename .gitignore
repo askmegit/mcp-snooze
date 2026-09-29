@@ -2,3 +2,4 @@ mcp-snooze
 *.exe
 dist/
 __pycache__/
+.omc/
