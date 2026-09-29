@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -158,7 +159,8 @@ func TestWriteFileAtomicKeepsModeAndSymlink(t *testing.T) {
 	}
 	b, _ := os.ReadFile(target)
 	fi, _ := os.Stat(target)
-	if string(b) != "new" || fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits; only the content is checked there.
+	if string(b) != "new" || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("target = %q mode %v", b, fi.Mode().Perm())
 	}
 	left, _ := filepath.Glob(filepath.Join(dir, "*"))
