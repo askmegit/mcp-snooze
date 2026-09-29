@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 const codexFixture = `model = "gpt-5"
@@ -228,5 +230,53 @@ func TestCodexMultilineStringHidesNoTables(t *testing.T) {
 		if _, err := CodexSetArgv([]byte(src), "b", []string{"y"}); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: edit inside string: err = %v, want ErrNotFound", q, err)
 		}
+	}
+}
+
+// Re-review P1-A and friends: every edit must either be refused or leave a document that a real
+// TOML parser reads as the original with only the target's command/args changed.
+func TestCodexEditIsRefusedOrExact(t *testing.T) {
+	cases := map[string]string{
+		"4-quote basic close":  "[mcp_servers.s]\ncommand = \"node\"\nenv = { A = \"\"\"say \"hi\"\"\"\", B = \"\"\"y\"\"\" }\nargs = [\"srv.js\"]\n",
+		"4-quote literal close": "[mcp_servers.s]\ncommand = \"node\"\nnote = '''n'''' # x''''\nargs = [\"srv.js\"]\n",
+		"quoted args key":      "[mcp_servers.s]\ncommand = \"node\"\n\"args\" = [\"srv.js\"]\n",
+		"array of arrays":      "[mcp_servers.s]\ncommand = \"node\"\nm = [\n  [1],\n]\nargs = [\"srv.js\"]\n",
+		"5-quote close":        "[mcp_servers.s]\ncommand = \"node\"\nnote = \"\"\"a\"\"\"\"\" # \"\"\"\nargs = [\"srv.js\"]\n",
+	}
+	want := []string{"/b/mcp-snooze", "--", "node", "srv.js"}
+	for name, src := range cases {
+		var before map[string]any
+		if _, err := toml.Decode(src, &before); err != nil {
+			t.Fatalf("%s: fixture is not valid TOML: %v", name, err)
+		}
+		if s, ok := servers(t, src)["s"]; ok && !reflect.DeepEqual(s.Argv, []string{"node", "srv.js"}) {
+			t.Errorf("%s: CodexServers argv = %v, want [node srv.js]", name, s.Argv)
+		}
+		out, err := CodexSetArgv([]byte(src), "s", want)
+		if err != nil {
+			continue // refusing is fine
+		}
+		var after map[string]any
+		if _, err := toml.Decode(string(out), &after); err != nil {
+			t.Errorf("%s: wrap wrote invalid TOML: %v\n%s", name, err, out)
+			continue
+		}
+		srv := before["mcp_servers"].(map[string]any)["s"].(map[string]any)
+		srv["command"] = want[0]
+		args := make([]any, len(want)-1)
+		for i, a := range want[1:] {
+			args[i] = a
+		}
+		srv["args"] = args
+		if !reflect.DeepEqual(after, before) {
+			t.Errorf("%s: edit changed more than command/args:\n got %v\nwant %v", name, after, before)
+		}
+	}
+}
+
+func TestCodexUnterminatedStringIsAnError(t *testing.T) {
+	src := "[mcp_servers.s]\ncommand = \"node\"\nnote = \"\"\"a\n"
+	if _, err := CodexSetArgv([]byte(src), "s", []string{"/b/mcp-snooze", "--", "node"}); err == nil {
+		t.Fatal("edited a document that is not valid TOML")
 	}
 }
