@@ -3,6 +3,7 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -153,6 +154,51 @@ func CodexServers(src []byte) ([]Server, error) {
 	return out, nil
 }
 
+// tomlEqual treats NaN as equal because NaN != NaN made every edit fail.
+func tomlEqual(a, b any) bool {
+	switch a := a.(type) {
+	case map[string]any:
+		b, ok := b.(map[string]any)
+		if !ok || len(a) != len(b) {
+			return false
+		}
+		for key, value := range a {
+			other, ok := b[key]
+			if !ok || !tomlEqual(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		b, ok := b.([]any)
+		if !ok || len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if !tomlEqual(a[i], b[i]) {
+				return false
+			}
+		}
+		return true
+	case []map[string]any:
+		b, ok := b.([]map[string]any)
+		if !ok || len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if !tomlEqual(a[i], b[i]) {
+				return false
+			}
+		}
+		return true
+	case float64:
+		b, ok := b.(float64)
+		return ok && ((math.IsNaN(a) && math.IsNaN(b)) || (a == b && math.Signbit(a) == math.Signbit(b)))
+	default:
+		return reflect.DeepEqual(a, b)
+	}
+}
+
 // CodexSetArgv rewrites command and args while changing no other bytes. Missing args is inserted
 // after command; a one-item argv removes args. Line endings (LF or CRLF) are preserved.
 // Returns ErrNotFound / ErrUnsupported and leaves src untouched on failure.
@@ -234,7 +280,7 @@ func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
 		}
 		server["args"] = args
 	}
-	if !reflect.DeepEqual(after, before) {
+	if !tomlEqual(after, before) {
 		return nil, ErrUnsupported
 	}
 	return []byte(t), nil
