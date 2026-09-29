@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -78,13 +79,14 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	})
 	stats := make([]processStats, len(servers))
 	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-		if output, err := exec.Command("ps", "-Ao", "rss=,args=").Output(); err == nil {
+		if output, err := exec.Command("ps", "-Ao", "pid=,rss=,args=").Output(); err == nil {
 			stats = parseProcessOutput(string(output), servers)
 		}
 	}
 	rows := make([]scanRow, len(servers))
 	for i, s := range servers {
-		rows[i] = scanRow{s.Harness, s.Scope, s.Name, s.Argv[0], append([]string{}, s.Argv[1:]...), s.Wrapped, s.Enabled, int(stats[i][0]), scanRSS(stats[i][1])}
+		maskedArgv := maskSecretArgs(s.Argv)
+		rows[i] = scanRow{s.Harness, s.Scope, s.Name, maskedArgv[0], append([]string{}, maskedArgv[1:]...), s.Wrapped, s.Enabled, int(stats[i][0]), scanRSS(stats[i][1])}
 	}
 	if *jsonOutput {
 		enc := json.NewEncoder(stdout)
@@ -103,29 +105,74 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 }
 
 func parseProcessOutput(output string, servers []Server) []processStats {
-	stats, commands := make([]processStats, len(servers)), make([]string, len(servers))
-	for i, s := range servers {
-		commands[i] = strings.Join(s.Argv, " ")
-	}
+	stats := make([]processStats, len(servers))
+	seenPIDs := make(map[int]struct{})
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		sep := strings.IndexAny(line, " \t")
-		if sep < 0 {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
 			continue
 		}
-		rss, err := strconv.ParseFloat(line[:sep], 64)
+		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue
 		}
-		cmd := strings.TrimSpace(line[sep:])
-		for i, target := range commands {
-			if target != "" && strings.Contains(cmd, target) {
-				stats[i][0]++
-				stats[i][1] += rss / 1024
+		rss, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		args := fields[2:]
+		executable := filepath.Base(args[0])
+		if executable == "mcp-snooze" || executable == "mcp-snooze.exe" {
+			continue
+		}
+		for i, server := range servers {
+			if len(args) != len(server.Argv) || len(server.Argv) == 0 || filepath.Base(server.Argv[0]) != executable {
+				continue
 			}
+			matches := true
+			for j := 1; j < len(args); j++ {
+				if args[j] != server.Argv[j] {
+					matches = false
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+			if _, duplicate := seenPIDs[pid]; duplicate {
+				break
+			}
+			seenPIDs[pid] = struct{}{}
+			stats[i][0]++
+			stats[i][1] += rss / 1024
+			break
 		}
 	}
 	return stats
+}
+
+// ponytail: ps drops argv quoting, so arguments containing whitespace cannot be matched as one token.
+func maskSecretArgs(args []string) []string {
+	masked := append([]string(nil), args...)
+	for i, arg := range masked {
+		if i > 0 && isSecretFlag(masked[i-1]) {
+			masked[i] = "***"
+			continue
+		}
+		if equals := strings.IndexByte(arg, '='); equals >= 0 && containsSecretName(arg[:equals]) {
+			masked[i] = arg[:equals+1] + "***"
+		}
+	}
+	return masked
+}
+
+func isSecretFlag(arg string) bool {
+	return strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") && containsSecretName(arg)
+}
+
+func containsSecretName(name string) bool {
+	name = strings.ToLower(name)
+	return strings.Contains(name, "key") || strings.Contains(name, "token") || strings.Contains(name, "secret") || strings.Contains(name, "password")
 }
 
 func printScanTable(out io.Writer, rows []scanRow) {
