@@ -141,6 +141,11 @@ def main():
         assert all(r["wrapped"] for r in rows), f"scan after wrap: {rows}"
         backups = os.path.join(h.dir, ".mcp-snooze", "backups")
         assert os.path.isdir(backups) and any(files for _, _, files in os.walk(backups)), "no backup written"
+        for root, dirs, files in os.walk(backups):
+            assert os.stat(root).st_mode & 0o777 == 0o700, f"backup dir {root} not 0700"
+            for f in files:
+                mode = os.stat(os.path.join(root, f)).st_mode & 0o777
+                assert mode == 0o600, f"backup file {f} mode {oct(mode)} (holds env secrets)"
 
         once = h.read()
         h.run("wrap")
@@ -169,6 +174,15 @@ def main():
         head = args[:args.index("--")]
         assert "1800" in head and any(a.startswith("--idle") for a in head), f"--idle not passed: {args}"
     case("wrap --idle is forwarded to the proxy", idle_flag)
+
+    def backup_retention():
+        h = Home()
+        for _ in range(7):
+            h.run("wrap")
+            h.run("unwrap")
+        runs = os.listdir(os.path.join(h.dir, ".mcp-snooze", "backups"))
+        assert 1 <= len(runs) <= 10, f"{len(runs)} backup runs kept, want at most 10"
+    case("wrap backups keep at most 10 runs", backup_retention)
 
     def missing_files():
         h = Home()
