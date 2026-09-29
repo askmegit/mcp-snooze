@@ -242,6 +242,19 @@ def main():
         assert split(json.load(open(h.claude))["mcpServers"]["bundled"])[0], "explicit --server ignored"
     case("app-bundled servers need an explicit --server", app_bundled)
 
+    # re-review P2-1: one Codex server in a form we cannot rewrite must not block the others
+    def codex_unrewritable_form_skipped():
+        h = Home()
+        open(h.codex, "a").write('\n[mcp_servers]\ninl = { command = "x", args = ["y"] }\n')
+        p = h.run("wrap")
+        assert "inl" in p.stderr and "skipped" in p.stderr, f"skip not reported: {p.stderr!r}"
+        t = tomllib.loads(open(h.codex).read())
+        assert split(t["mcp_servers"]["dart"])[0], "rewritable server not wrapped"
+        assert t["mcp_servers"]["inl"] == {"command": "x", "args": ["y"]}, t["mcp_servers"]["inl"]
+        p = h.run("wrap", "--server", "inl", ok=False)
+        assert p.returncode != 0 and "inl" in p.stderr, (p.returncode, p.stderr)
+    case("codex server in an unrewritable form is skipped, others wrapped", codex_unrewritable_form_skipped)
+
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0
 

@@ -168,10 +168,18 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 				}
 				argv = WrappedArgv(bin, proxyFlags, server.Argv)
 			}
+			var next []byte
 			if harness == "claude" {
-				updated, err = ClaudeSetArgv(updated, server.Scope, server.Name, argv)
+				next, err = ClaudeSetArgv(updated, server.Scope, server.Name, argv)
 			} else {
-				updated, err = CodexSetArgv(updated, server.Name, argv)
+				next, err = CodexSetArgv(updated, server.Name, argv)
+			}
+			// A server listed by the reader but written in a form the editor does not
+			// rewrite is skipped so the others still get wrapped; naming it is an error.
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnsupported) {
+				fmt.Fprintf(stderr, "%s: %s: cannot rewrite this config form; skipped\n", harness, server.Name)
+				failed = failed || selectedServers[server.Name]
+				continue
 			}
 			if err != nil {
 				fmt.Fprintf(stderr, "%s: %s: %v\n", harness, path, err)
@@ -179,6 +187,7 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 				changes = nil
 				break
 			}
+			updated = next
 			changes = append(changes, wrapChange{server: server, verb: verb})
 		}
 		if len(changes) == 0 {
