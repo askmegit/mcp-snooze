@@ -55,6 +55,9 @@ for line in sys.stdin:
     elif meth == "tools/call":
         if m["params"]["name"] == "hang":
             continue
+        if m["params"]["name"] == "bye":
+            send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": "x" * 4000000}]}})
+            os._exit(0)
         if m["params"]["name"] == "slow":
             time.sleep(float(m["params"]["arguments"]["s"]))
         send({"jsonrpc": "2.0", "id": i, "result": {"content": [
@@ -360,6 +363,18 @@ def main():
         finally:
             c.close()
     case("idle reap does not interrupt cold start", idle_shorter_than_cold_start)
+
+    # 16 a server that writes its reply and exits at once must still deliver that reply
+    def reply_then_exit():
+        for n in range(5):
+            c = Client(work, cache)
+            try:
+                c.handshake()
+                r = c.call(97 + n, "tools/call", {"name": "bye", "arguments": {}})
+                assert len(r.get("result", {}).get("content", [{}])[0].get("text", "")) == 4000000, f"reply lost or truncated: {str(r)[:200]}"
+            finally:
+                c.close()
+    case("reply written just before exit is delivered", reply_then_exit)
 
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0
