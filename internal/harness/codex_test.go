@@ -237,11 +237,11 @@ func TestCodexMultilineStringHidesNoTables(t *testing.T) {
 // TOML parser reads as the original with only the target's command/args changed.
 func TestCodexEditIsRefusedOrExact(t *testing.T) {
 	cases := map[string]string{
-		"4-quote basic close":  "[mcp_servers.s]\ncommand = \"node\"\nenv = { A = \"\"\"say \"hi\"\"\"\", B = \"\"\"y\"\"\" }\nargs = [\"srv.js\"]\n",
+		"4-quote basic close":   "[mcp_servers.s]\ncommand = \"node\"\nenv = { A = \"\"\"say \"hi\"\"\"\", B = \"\"\"y\"\"\" }\nargs = [\"srv.js\"]\n",
 		"4-quote literal close": "[mcp_servers.s]\ncommand = \"node\"\nnote = '''n'''' # x''''\nargs = [\"srv.js\"]\n",
-		"quoted args key":      "[mcp_servers.s]\ncommand = \"node\"\n\"args\" = [\"srv.js\"]\n",
-		"array of arrays":      "[mcp_servers.s]\ncommand = \"node\"\nm = [\n  [1],\n]\nargs = [\"srv.js\"]\n",
-		"5-quote close":        "[mcp_servers.s]\ncommand = \"node\"\nnote = \"\"\"a\"\"\"\"\" # \"\"\"\nargs = [\"srv.js\"]\n",
+		"quoted args key":       "[mcp_servers.s]\ncommand = \"node\"\n\"args\" = [\"srv.js\"]\n",
+		"array of arrays":       "[mcp_servers.s]\ncommand = \"node\"\nm = [\n  [1],\n]\nargs = [\"srv.js\"]\n",
+		"5-quote close":         "[mcp_servers.s]\ncommand = \"node\"\nnote = \"\"\"a\"\"\"\"\" # \"\"\"\nargs = [\"srv.js\"]\n",
 	}
 	want := []string{"/b/mcp-snooze", "--", "node", "srv.js"}
 	for name, src := range cases {
