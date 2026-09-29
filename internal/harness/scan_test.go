@@ -49,3 +49,19 @@ func TestMaskSecretArgs(t *testing.T) {
 		t.Fatal("maskSecretArgs modified its input")
 	}
 }
+
+// Real ps lines seen on macOS: an interpreter in front of the configured command, and extra
+// trailing args injected by the launcher. Exact whole-argv matching counted none of these.
+func TestScanMatchesInterpreterPrefixAndTrailingArgs(t *testing.T) {
+	servers := []Server{
+		{Name: "firebase", Argv: []string{"firebase", "experimental:mcp", "--only", "crashlytics"}},
+		{Name: "dart", Argv: []string{"dart", "mcp-server"}},
+	}
+	ps := "41 154720 node /u/.nvm/versions/node/v22/bin/firebase experimental:mcp --only crashlytics\n" +
+		"42 34560 /u/fvm/dart-sdk/bin/dart mcp-server --disable analysis\n" +
+		"43 1000 grep dart mcp-server\n"
+	got := parseProcessOutput(ps, servers)
+	if got[0][0] != 1 || got[1][0] != 1 {
+		t.Fatalf("got %v, want firebase 1 and dart 1 (grep excluded)", got)
+	}
+}

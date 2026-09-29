@@ -104,8 +104,41 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// ponytail: exact argv match on ps output. ps drops quoting (args with spaces never match) and
-// launchers (npx, uvx) show their child under another argv, so those count 0; upgrade path is a
+// interpreters may appear in front of the configured command in ps output
+// (a `#!/usr/bin/env node` script shows up as `node /path/to/script ...`).
+var interpreters = map[string]bool{"node": true, "python": true, "python3": true, "Python": true,
+	"java": true, "bun": true, "deno": true, "ruby": true, "sh": true, "bash": true, "zsh": true}
+
+// argvMatches reports whether the configured argv starts the process argv, either at its first
+// token or right after an interpreter; the command is compared by basename, extra trailing
+// process args are allowed.
+func argvMatches(proc, argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	for start := 0; start <= 1; start++ {
+		if start == 1 && !interpreters[filepath.Base(proc[0])] {
+			break
+		}
+		if len(proc)-start < len(argv) || filepath.Base(proc[start]) != filepath.Base(argv[0]) {
+			continue
+		}
+		matched := true
+		for j := 1; j < len(argv); j++ {
+			if proc[start+j] != argv[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// ponytail: prefix argv match on ps output. ps drops quoting (args with spaces never match) and
+// launchers (npx, uvx, JVM wrapper scripts) run their child under another argv, so those count 0; upgrade path is a
 // per-server pid file written by the proxy.
 func parseProcessOutput(output string, servers []Server) []processStats {
 	stats := make([]processStats, len(servers))
@@ -124,22 +157,11 @@ func parseProcessOutput(output string, servers []Server) []processStats {
 			continue
 		}
 		args := fields[2:]
-		executable := filepath.Base(args[0])
-		if executable == "mcp-snooze" || executable == "mcp-snooze.exe" {
+		if executable := filepath.Base(args[0]); executable == "mcp-snooze" || executable == "mcp-snooze.exe" {
 			continue
 		}
 		for i, server := range servers {
-			if len(args) != len(server.Argv) || len(server.Argv) == 0 || filepath.Base(server.Argv[0]) != executable {
-				continue
-			}
-			matches := true
-			for j := 1; j < len(args); j++ {
-				if args[j] != server.Argv[j] {
-					matches = false
-					break
-				}
-			}
-			if !matches {
+			if !argvMatches(args, server.Argv) {
 				continue
 			}
 			if _, duplicate := seenPIDs[pid]; duplicate {
