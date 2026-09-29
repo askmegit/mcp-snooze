@@ -105,11 +105,6 @@ def handshake(session):
     })
     send_notification(session, "notifications/initialized")
     request(session, "tools/list", f"{session.label}-list")
-
-
-def read_log(session):
-    session.log_file.flush(); session.log_file.seek(0)
-    return session.log_file.read().strip()
 def process_snapshot():
     processes, children = {}, {}
     for line in subprocess.check_output(["ps", "-Ao", "pid=,ppid=,rss="], text=True).splitlines():
