@@ -331,8 +331,8 @@ func (p *proxy) readChild(proc *childProcess) {
 	proc.exitMu.Lock()
 	proc.exit = waitErr
 	proc.exitMu.Unlock()
-	close(proc.done)
 	p.childExited(proc, waitErr)
+	close(proc.done)
 }
 
 func (p *proxy) handleChildLine(proc *childProcess, line string) {
