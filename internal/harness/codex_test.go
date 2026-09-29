@@ -201,3 +201,32 @@ func TestCodexErrorsLeaveInputAlone(t *testing.T) {
 		t.Errorf("inline table: err = %v, want ErrUnsupported or ErrNotFound", err)
 	}
 }
+
+// Review P1-1: a triple-quoted command used to parse as "" and wrap wrote invalid TOML.
+func TestCodexTripleQuotedCommandUnsupported(t *testing.T) {
+	for _, q := range []string{`"""`, `'''`} {
+		src := "[mcp_servers.a]\ncommand = " + q + "npx" + q + "\nargs = [\"-y\"]\n"
+		for _, s := range servers(t, src) {
+			if len(s.Argv) == 0 || s.Argv[0] == "" {
+				t.Errorf("%s: server reported with empty command: %+v", q, s)
+			}
+		}
+		if _, err := CodexSetArgv([]byte(src), "a", []string{"/b/mcp-snooze", "--", "npx", "-y"}); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("%s: err = %v, want ErrUnsupported", q, err)
+		}
+	}
+}
+
+// Review P2-1: table headers inside a multi-line string are text, not tables.
+func TestCodexMultilineStringHidesNoTables(t *testing.T) {
+	for _, q := range []string{`"""`, `'''`} {
+		src := "[mcp_servers.a]\ncommand = \"x\"\ndescription = " + q + "\n[mcp_servers.b]\ncommand = \"evil\"\n" + q + "\n"
+		m := servers(t, src)
+		if _, ok := m["b"]; ok || len(m) != 1 {
+			t.Errorf("%s: got %v, want only a", q, m)
+		}
+		if _, err := CodexSetArgv([]byte(src), "b", []string{"y"}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: edit inside string: err = %v, want ErrNotFound", q, err)
+		}
+	}
+}

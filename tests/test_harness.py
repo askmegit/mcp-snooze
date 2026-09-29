@@ -9,6 +9,7 @@ Every case runs against a throwaway HOME holding a fixture ~/.claude.json and
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -192,6 +193,54 @@ def main():
         h.run("wrap")
         assert not os.path.exists(h.codex), "wrap created a codex config"
     case("absent harness config is skipped", missing_files)
+
+    # review P1-2: a binary not named mcp-snooze writes entries that wrap/unwrap cannot recognise
+    def foreign_binary_name():
+        h = Home()
+        other = os.path.join(h.dir, "snooze-renamed")
+        shutil.copy(BIN, other)
+        before = h.read()
+        env = {k: v for k, v in os.environ.items() if k not in ("CODEX_HOME", "CLAUDE_CONFIG_DIR")}
+        env["HOME"] = h.dir
+        p = subprocess.run([other, "wrap"], capture_output=True, text=True, env=env, timeout=30)
+        assert p.returncode != 0, "wrap with a renamed binary must refuse"
+        assert "mcp-snooze" in p.stderr, f"refusal should name the expected binary: {p.stderr!r}"
+        assert h.read() == before, "refused wrap still changed a config"
+    case("wrap refuses a binary not named mcp-snooze", foreign_binary_name)
+
+    # review P2-4: a server disabled after wrap must still be unwrapped
+    def unwrap_disabled():
+        h = Home()
+        h.run("wrap")
+        text = open(h.codex).read().replace("[mcp_servers.dart]\n", "[mcp_servers.dart]\nenabled = false\n", 1)
+        open(h.codex, "w").write(text)
+        h.run("unwrap")
+        t = tomllib.loads(open(h.codex).read())
+        assert not split(t["mcp_servers"]["dart"])[0], "disabled server left wrapped by unwrap"
+    case("unwrap restores disabled servers", unwrap_disabled)
+
+    # review P2-9: a --server that matches nothing is an error, not a silent no-op
+    def unknown_server():
+        h = Home()
+        before = h.read()
+        p = h.run("wrap", "--server", "nosuch", ok=False)
+        assert p.returncode != 0 and "nosuch" in p.stderr, (p.returncode, p.stderr)
+        assert h.read() == before, "configs changed"
+    case("--server matching nothing is reported", unknown_server)
+
+    # review P2-10: app-bundled servers are skipped unless named with --server
+    def app_bundled():
+        h = Home()
+        c = json.load(open(h.claude))
+        c["mcpServers"]["bundled"] = {"command": "/Applications/Foo.app/Contents/Resources/srv", "args": []}
+        json.dump(c, open(h.claude, "w"), indent=2)
+        h.run("wrap")
+        c = json.load(open(h.claude))
+        assert not split(c["mcpServers"]["bundled"])[0], "app-bundled server wrapped without --server"
+        assert split(c["mcpServers"]["maestro"])[0], "normal server not wrapped"
+        h.run("wrap", "--server", "bundled")
+        assert split(json.load(open(h.claude))["mcpServers"]["bundled"])[0], "explicit --server ignored"
+    case("app-bundled servers need an explicit --server", app_bundled)
 
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0

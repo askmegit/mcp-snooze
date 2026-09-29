@@ -166,3 +166,14 @@ func TestWriteFileAtomicKeepsModeAndSymlink(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", left)
 	}
 }
+
+// Review P2-2: non-string args used to be dropped silently, so wrap changed the command line.
+func TestClaudeNonStringArgsUnsupported(t *testing.T) {
+	src := []byte(`{"mcpServers": {"s": {"command": "srv", "args": ["--port", 8080, "x"]}}}`)
+	if s, ok := claudeMap(t, src)["user/s"]; ok {
+		t.Fatalf("server with non-string args listed as %v", s.Argv)
+	}
+	if _, err := ClaudeSetArgv(src, "user", "s", []string{"/b/mcp-snooze", "--", "srv"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}
