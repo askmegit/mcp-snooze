@@ -3,8 +3,11 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 func multilineState(s string, quote byte) byte {
@@ -51,6 +54,7 @@ func multilineState(s string, quote byte) byte {
 	}
 	return quote
 }
+
 func hasTripleString(s string) bool {
 	for i := 0; i < len(s); {
 		if s[i] == '#' {
@@ -88,45 +92,62 @@ type edit struct {
 	text       string
 }
 
-// CodexServers lists stdio servers declared as [mcp_servers.<name>] tables in a Codex config.toml.
-// Entries with url are skipped, as are tables that only look similar (e.g. [other.mcp_servers.x]).
+// CodexServers lists stdio servers declared in the mcp_servers table of a Codex config.toml.
+// Entries without a string command or with non-string args are skipped.
 func CodexServers(src []byte) ([]Server, error) {
-	t := string(src)
-	tables, names, err := scan(t)
+	var config map[string]any
+	meta, err := toml.Decode(string(src), &config)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Server, 0, len(names))
-	for _, name := range names {
-		tab := tables[name]
-		if _, ok := tab["url"]; ok {
+	out := make([]Server, 0)
+	tables, ok := config["mcp_servers"].(map[string]any)
+	if !ok {
+		return out, nil
+	}
+	var names []string
+	seen := make(map[string]struct{}, len(tables))
+	for _, key := range meta.Keys() {
+		if len(key) < 2 || key[0] != "mcp_servers" {
 			continue
 		}
-		c, ok := tab["command"]
+		name := key[1]
+		if _, ok := seen[name]; !ok {
+			names = append(names, name)
+			seen[name] = struct{}{}
+		}
+	}
+	for _, name := range names {
+		tab, ok := tables[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		if hasTripleString(t[c[2]:c[3]]) {
+		cmd, ok := tab["command"].(string)
+		if !ok {
 			continue
-		}
-		if a, ok := tab["args"]; ok && hasTripleString(t[a[2]:a[3]]) {
-			continue
-		}
-		cmd, err := tomlString(t[c[2]:c[3]])
-		if err != nil {
-			return nil, fmt.Errorf("Codex server %q command: %w", name, err)
 		}
 		argv := []string{cmd}
-		if a, ok := tab["args"]; ok {
-			args, err := tomlArray(t[a[2]:a[3]])
-			if err != nil {
-				return nil, fmt.Errorf("Codex server %q args: %w", name, err)
+		if raw, exists := tab["args"]; exists {
+			args, ok := raw.([]any)
+			if !ok {
+				continue
 			}
-			argv = append(argv, args...)
+			valid := true
+			for _, arg := range args {
+				value, ok := arg.(string)
+				if !ok {
+					valid = false
+					break
+				}
+				argv = append(argv, value)
+			}
+			if !valid {
+				continue
+			}
 		}
 		wrapped, flags, argv := SplitWrapped(argv)
 		enabled := true
-		if f, ok := tab["enabled"]; ok && strings.TrimSpace(t[f[2]:f[3]]) == "false" {
+		if value, ok := tab["enabled"].(bool); ok && !value {
 			enabled = false
 		}
 		out = append(out, Server{Harness: "codex", Scope: "user", Name: name, Argv: argv, Wrapped: wrapped, ProxyFlags: flags, Enabled: enabled})
@@ -138,6 +159,10 @@ func CodexServers(src []byte) ([]Server, error) {
 // after command; a one-item argv removes args. Line endings (LF or CRLF) are preserved.
 // Returns ErrNotFound / ErrUnsupported and leaves src untouched on failure.
 func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
+	var before map[string]any
+	if _, err := toml.Decode(string(src), &before); err != nil {
+		return nil, err
+	}
 	if len(argv) == 0 {
 		return nil, errors.New("Codex server argv must include a command")
 	}
@@ -188,6 +213,31 @@ func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
 	}
 	for _, e := range edits {
 		t = t[:e.start] + e.text + t[e.end:]
+	}
+	var after map[string]any
+	if _, err := toml.Decode(t, &after); err != nil {
+		return nil, ErrUnsupported
+	}
+	servers, ok := before["mcp_servers"].(map[string]any)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	server, ok := servers[name].(map[string]any)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	server["command"] = argv[0]
+	if len(argv) == 1 {
+		delete(server, "args")
+	} else {
+		args := make([]any, len(argv)-1)
+		for i, arg := range argv[1:] {
+			args[i] = arg
+		}
+		server["args"] = args
+	}
+	if !reflect.DeepEqual(after, before) {
+		return nil, ErrUnsupported
 	}
 	return []byte(t), nil
 }
@@ -417,38 +467,7 @@ func tomlString(s string) (string, error) {
 	}
 	return strconv.Unquote(s)
 }
-func tomlArray(s string) ([]string, error) {
-	var out []string
-	for i := 1; i < len(s)-1; {
-		for i < len(s)-1 {
-			if strings.ContainsRune(" \t\r\n,", rune(s[i])) {
-				i++
-			} else if s[i] == '#' {
-				if n := strings.IndexByte(s[i:], '\n'); n >= 0 {
-					i += n + 1
-				} else {
-					return nil, errors.New("invalid TOML array")
-				}
-			} else {
-				break
-			}
-		}
-		if i >= len(s)-1 {
-			break
-		}
-		end, err := quotedEnd(s, i)
-		if err != nil {
-			return nil, err
-		}
-		v, err := tomlString(s[i:end])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-		i = end
-	}
-	return out, nil
-}
+
 func quote(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
