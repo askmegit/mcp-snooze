@@ -1,0 +1,10 @@
+{
+  "name": "mcp-snooze",
+  "version": "0.1.0",
+  "description": "Lazy-start stdio MCP servers so idle sessions stop holding memory.",
+  "author": {
+    "name": "askmegit"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/askmegit/mcp-snooze"
+}
