@@ -104,6 +104,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// ponytail: exact argv match on ps output. ps drops quoting (args with spaces never match) and
+// launchers (npx, uvx) show their child under another argv, so those count 0; upgrade path is a
+// per-server pid file written by the proxy.
 func parseProcessOutput(output string, servers []Server) []processStats {
 	stats := make([]processStats, len(servers))
 	seenPIDs := make(map[int]struct{})
@@ -151,7 +154,6 @@ func parseProcessOutput(output string, servers []Server) []processStats {
 	return stats
 }
 
-// ponytail: ps drops argv quoting, so arguments containing whitespace cannot be matched as one token.
 func maskSecretArgs(args []string) []string {
 	masked := append([]string(nil), args...)
 	for i, arg := range masked {
