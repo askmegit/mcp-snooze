@@ -77,7 +77,50 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 		proxyFlags = []string{"--idle", *idle}
 	}
 
+	var bin string
+	if !undo {
+		bin = proxyBinary()
+		base := filepath.Base(bin)
+		if base != "mcp-snooze" && base != "mcp-snooze.exe" {
+			fmt.Fprintf(stderr, "%s: executable must be named mcp-snooze (or mcp-snooze.exe): %s\n", name, bin)
+			return 1
+		}
+	}
 	paths := configPaths()
+	matched := make(map[string]bool, len(selectedServers))
+	for _, harness := range []string{"claude", "codex"} {
+		if !selectedHarnesses[harness] {
+			continue
+		}
+		original, err := os.ReadFile(paths[harness])
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %s: %v\n", harness, paths[harness], err)
+			return 1
+		}
+		entries, err := loadServers(harness, original)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %s: %v\n", harness, paths[harness], err)
+			return 1
+		}
+		for _, server := range entries {
+			if selectedServers[server.Name] {
+				matched[server.Name] = true
+			}
+		}
+	}
+	missing := false
+	for _, server := range servers {
+		if !matched[server] {
+			fmt.Fprintf(stderr, "server %q matched no stdio entry in selected harnesses\n", server)
+			missing = true
+		}
+	}
+	if missing {
+		return 1
+	}
 	var backupRun string
 	wrapped, unwrapped := 0, 0
 	failed := false
@@ -104,7 +147,11 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 		updated := original
 		changes := make([]wrapChange, 0)
 		for _, server := range entries {
-			if !server.Enabled || (len(selectedServers) != 0 && !selectedServers[server.Name]) {
+			if (!undo && !server.Enabled) || (len(selectedServers) != 0 && !selectedServers[server.Name]) {
+				continue
+			}
+			if !undo && len(selectedServers) == 0 && strings.Contains(server.Argv[0], ".app/Contents/") {
+				fmt.Fprintf(stderr, "%s: %s: skipping app-bundled server; pass --server %s to wrap\n", harness, server.Name, server.Name)
 				continue
 			}
 			var argv []string
@@ -119,7 +166,7 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 				if server.Wrapped {
 					continue
 				}
-				argv = WrappedArgv(proxyBinary(), proxyFlags, server.Argv)
+				argv = WrappedArgv(bin, proxyFlags, server.Argv)
 			}
 			if harness == "claude" {
 				updated, err = ClaudeSetArgv(updated, server.Scope, server.Name, argv)
@@ -169,8 +216,10 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 			failed = true
 			continue
 		}
-		if err = writeFileAtomic(path, updated); err != nil {
-			_ = os.Remove(backupPath)
+		if err = writeFileAtomicExpected(path, updated, original); err != nil {
+			if !errors.Is(err, errConfigChangedWhileWriting) {
+				_ = os.Remove(backupPath)
+			}
 			fmt.Fprintf(stderr, "%s: %s: %v\n", harness, path, err)
 			failed = true
 			continue
