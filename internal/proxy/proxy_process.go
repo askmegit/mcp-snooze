@@ -301,7 +301,19 @@ func exitCode(err error) string {
 }
 
 func (p *proxy) readChild(proc *childProcess) {
+	defer proc.stdout.Close()
 	reader := bufio.NewReader(proc.stdout)
+	readDone, waitDone := make(chan struct{}), make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = proc.cmd.Wait()
+		close(waitDone)
+		select {
+		case <-readDone:
+		case <-time.After(500 * time.Millisecond):
+			_ = proc.stdout.Close()
+		}
+	}()
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) != 0 {
@@ -314,12 +326,13 @@ func (p *proxy) readChild(proc *childProcess) {
 			break
 		}
 	}
-	waitErr := proc.cmd.Wait()
+	close(readDone)
+	<-waitDone
 	proc.exitMu.Lock()
 	proc.exit = waitErr
 	proc.exitMu.Unlock()
-	p.childExited(proc, waitErr)
 	close(proc.done)
+	p.childExited(proc, waitErr)
 }
 
 func (p *proxy) handleChildLine(proc *childProcess, line string) {

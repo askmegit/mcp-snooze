@@ -17,16 +17,19 @@ func startProcess(command []string, stderr io.Writer) (*childProcess, error) {
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdout, writeEnd, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
 		return nil, err
 	}
+	cmd.Stdout = writeEnd
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = writeEnd.Close()
 		return nil, err
 	}
+	_ = writeEnd.Close()
 	return &childProcess{cmd: cmd, stdin: stdin, stdout: stdout, done: make(chan struct{})}, nil
 }
 
