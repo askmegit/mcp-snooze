@@ -1,0 +1,4 @@
+mcp-snooze
+*.exe
+dist/
+__pycache__/
