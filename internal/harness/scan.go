@@ -137,7 +137,7 @@ func argvMatches(proc, argv []string) bool {
 	return false
 }
 
-// ponytail: prefix argv match on ps output. ps drops quoting (args with spaces never match) and
+// Best-effort prefix argv match on ps output. ps drops quoting (args with spaces never match) and
 // launchers (npx, uvx, JVM wrapper scripts) run their child under another argv, so those count 0; upgrade path is a
 // per-server pid file written by the proxy.
 func parseProcessOutput(output string, servers []Server) []processStats {

@@ -134,7 +134,7 @@ def alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    # 已退出但未回收的僵尸也算死
+    # an exited but unreaped zombie counts as dead
     st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
     return bool(st.strip()) and not st.strip().startswith("Z")
 
@@ -154,7 +154,7 @@ def recv_methods(work, pid):
 
 
 def main():
-    work = tempfile.mkdtemp(prefix="mcp-lazy-")
+    work = tempfile.mkdtemp(prefix="mcp-snooze-")
     cache = os.path.join(work, "cache")
     open(os.path.join(work, "fake.py"), "w").write(FAKE)
     fails = []
@@ -167,7 +167,7 @@ def main():
             fails.append(name)
             print(f"FAIL {name}: {e}")
 
-    # 1 冷启动：无缓存时拉起一次真服务端填缓存，握手与 tools/list 返回真实内容，空闲后子进程被杀
+    # 1 cold start: with no cache, start the real server once to fill it; handshake and tools/list return real content; child killed after idle
     def cold():
         c = Client(work, cache)
         try:
@@ -185,7 +185,7 @@ def main():
             c.close()
     case("cold start fills cache, child reaped after idle", cold)
 
-    # 2 热启动：有缓存时 initialize / tools/list / ping 都不拉起子进程
+    # 2 warm start: with a cache, initialize / tools/list / ping start no child
     def warm():
         before = len(spawns(work))
         c = Client(work, cache)
@@ -199,7 +199,7 @@ def main():
             time.sleep(0.5)
             assert len(spawns(work)) == before, f"warm start spawned: {spawns(work)}"
 
-            # 3 首次 tools/call 才拉起；客户端 id（数字和字符串）原样回来；子进程先收到 initialize
+            # 3 first tools/call starts the child; client ids (number and string) come back unchanged; child gets initialize first
             r = c.call(42, "tools/call", {"name": "echo", "arguments": {"x": 1}})
             assert "result" in r and '"x": 1' in r["result"]["content"][0]["text"], r
             s = spawns(work)
@@ -211,23 +211,23 @@ def main():
             assert r["id"] == "abc" and "result" in r, r
             assert len(spawns(work)) == before + 1, "second call must reuse the live child"
 
-            # 4 空闲被杀后，下次调用透明重拉
+            # 4 after an idle kill, the next call restarts the child transparently
             assert wait_dead(s[-1], IDLE + 4), "child not reaped after idle"
             r = c.call(43, "tools/call", {"name": "echo", "arguments": {"y": 2}})
             assert "result" in r, r
             assert len(spawns(work)) == before + 2, f"respawn expected: {spawns(work)}"
 
-            # 5 进行中的调用不算空闲：比 idle 长的调用照样拿到结果
+            # 5 an in-flight call is not idle: a call longer than --idle still gets its result
             live = spawns(work)[-1]
             r = c.call(44, "tools/call", {"name": "slow", "arguments": {"s": IDLE * 2.5}})
             assert "result" in r and f"pid={live}" in r["result"]["content"][0]["text"], r
         finally:
             c.close()
-        # 6 stdin EOF：shim 退出，子进程一并退出
+        # 6 stdin EOF: proxy exits and takes the child with it
         assert wait_dead(spawns(work)[-1], 3), "child survived shim exit"
     case("warm start lazy, id passthrough, idle respawn, busy not reaped, EOF cleanup", warm)
 
-    # 7 缓存按工作目录区分（firebase 的工具集随 cwd 变）
+    # 7 cache is keyed by working directory (some servers' tools depend on cwd)
     def per_cwd():
         other = os.path.join(work, "other")
         os.makedirs(other, exist_ok=True)
@@ -243,7 +243,7 @@ def main():
         assert n == 2, f"expected 2 cache entries, got {os.listdir(cache)}"
     case("cache keyed by cwd", per_cwd)
 
-    # 8 取消的请求不能永远占着 in-flight：Node 版 SDK 对取消的请求不回响应
+    # 8 a cancelled request must not stay in flight forever: the Node SDK sends no response for it
     def cancelled():
         c = Client(work, cache)
         try:
@@ -260,7 +260,7 @@ def main():
             c.close()
     case("cancelled request does not block idle reap", cancelled)
 
-    # 9 错误响应不进缓存：服务端没就绪时的 tools/list 错误不能毒化之后的会话
+    # 9 error responses are never cached: a tools/list error from a server not yet ready must not poison later sessions
     def no_error_cache():
         cache2 = os.path.join(work, "cache-err")
         c = Client(work, cache2, env={"FAKE_FAIL_LIST": "1"})
@@ -278,11 +278,11 @@ def main():
             c.close()
     case("error responses are not cached", no_error_cache)
 
-    # 10 服务端卡在 initialize：调用在 --start-timeout 内返回错误，EOF 后照常退出
+    # 10 server stuck in initialize: the call errors within --start-timeout and the proxy still exits on EOF
     def hung_init():
         c = Client(work, cache, env={"FAKE_HANG_INIT": "1"}, args=("--start-timeout", "2"))
         try:
-            c.handshake()  # 命中缓存，不拉起
+            c.handshake()  # served from cache, no start
             t0 = time.time()
             r = c.call(91, "tools/call", {"name": "echo", "arguments": {}}, timeout=10)
             assert "error" in r, r
@@ -291,7 +291,7 @@ def main():
             c.close()
     case("hung initialize times out with error", hung_init)
 
-    # 11 拉起后发现工具列表变了（服务升级）：刷新缓存并通知客户端
+    # 11 tool list changed after start (server upgraded): refresh the cache and notify the client
     def refresh():
         c = Client(work, cache, env={"FAKE_EXTRA_TOOL": "1"})
         try:
@@ -314,7 +314,7 @@ def main():
             c.close()
     case("tool list refreshed after spawn", refresh)
 
-    # 12 代理被 SIGTERM：子进程一并退出
+    # 12 proxy gets SIGTERM: the child exits with it
     def sigterm():
         c = Client(work, cache)
         try:

@@ -21,7 +21,7 @@ This is a synthetic benchmark: the "server" is a small Python script that holds 
 
 ## Quick start
 
-Install (the binary must be named `mcp-snooze`; `wrap` refuses any other name):
+Install (Go 1.27.1 or newer; the binary must be named `mcp-snooze`, and `wrap` refuses any other name):
 
 ```bash
 go install github.com/askmegit/mcp-snooze@latest
@@ -135,7 +135,7 @@ Claude Code has an env var `MCP_DISCOVERY_CACHE=1`. In our test with `claude -p`
 
 **What about servers with state?** Each session has its own proxy and its own server process, so state is never shared. Reaping only happens when no request is in flight and nothing is waiting on the client, but state does not survive a reap: sessions, subscriptions (`resources/subscribe`) and in-memory data die with the process. The proxy does not track or replay subscriptions. Server-initiated requests (sampling, roots, elicitation) are forwarded to the client and the replies routed back while the server is running. For stateful servers such as a browser or device driver, use a long `--idle` or do not wrap them (`wrap --server` lets you pick).
 
-**Windows?** Windows code exists (`proxy_windows.go`) and CI builds it on `windows-latest`, but the test steps run only on Linux and macOS. Treat Windows as untested. `scan` reads process memory via `ps`, so it reports memory only on macOS and Linux.
+**Windows?** Windows code exists (`proxy_windows.go`). CI runs `go vet`, the Go unit tests and a build on `windows-latest`, but the black-box tests that exercise lazy start and idle reap run only on Linux and macOS. Treat Windows as untested. `scan` reads process memory via `ps`, so it reports memory only on macOS and Linux.
 
 **http / sse servers?** Untouched. Only stdio entries are wrapped.
 
@@ -144,7 +144,8 @@ Claude Code has an env var `MCP_DISCOVERY_CACHE=1`. In our test with `claude -p`
 ## Limitations
 
 - `wrap` re-encodes `~/.claude.json`, which sorts its keys. The content is preserved, the key order is not. Only user-level and per-project `mcpServers` in that file are handled.
-- Codex entries are edited in place, changing only `command` and `args`. Servers not written as a plain `[mcp_servers.NAME]` table with single-line values (inline tables, for example) are left alone rather than rewritten, and may not show up in `scan`.
+- Codex entries are edited in place, changing only `command` and `args`, and every edit is re-read with a TOML parser before it is written. A server `wrap` cannot rewrite faithfully (an inline table, a triple-quoted value, an `args` array with comments in it) is skipped with a message and the others are still wrapped; naming it with `--server` makes the run exit non-zero.
+- `unwrap` of a Codex server whose original config had `args = []` removes the `args` line instead of restoring the empty array. Codex treats the two the same.
 - Changing `--idle` on an already wrapped server needs `unwrap` and then `wrap --idle N`.
 - `scan` matches processes to servers by command line via `ps`; per-server memory is a best-effort figure.
 - The MCP spec dated 2026-07-28 removes the `initialize` handshake. The replay-based design here targets the current handshake; support for the new spec is on the roadmap.

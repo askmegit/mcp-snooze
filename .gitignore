@@ -1,5 +1,7 @@
-mcp-snooze
+/mcp-snooze
 *.exe
 dist/
 __pycache__/
 .omc/
+.claude/
+.DS_Store
