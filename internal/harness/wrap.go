@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,6 +70,10 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 	}
 	proxyFlags := []string(nil)
 	if *idle != "" {
+		if v, err := strconv.ParseFloat(*idle, 64); err != nil || v <= 0 {
+			fmt.Fprintf(stderr, "%s: --idle must be a positive number of seconds\n", name)
+			return 2
+		}
 		proxyFlags = []string{"--idle", *idle}
 	}
 
@@ -129,7 +134,7 @@ func runWrap(args []string, stdout, stderr io.Writer, undo bool) int {
 			}
 			changes = append(changes, wrapChange{server: server, verb: verb})
 		}
-		if len(changes) == 0 || failed && !bytes.Equal(updated, original) && len(changes) == 0 {
+		if len(changes) == 0 {
 			continue
 		}
 		if *dryRun {
