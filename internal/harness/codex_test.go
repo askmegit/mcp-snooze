@@ -280,3 +280,23 @@ func TestCodexUnterminatedStringIsAnError(t *testing.T) {
 		t.Fatal("edited a document that is not valid TOML")
 	}
 }
+
+// Re-review P2-2: a nan anywhere in the file made the verify gate refuse every edit (NaN != NaN).
+func TestCodexNaNElsewhereStillEdits(t *testing.T) {
+	src := "v = nan\nw = [nan]\n[mcp_servers.s]\ncommand = \"node\"\nargs = [\"srv.js\"]\n"
+	out, err := CodexSetArgv([]byte(src), "s", []string{"/b/mcp-snooze", "--", "node", "srv.js"})
+	if err != nil {
+		t.Fatalf("err = %v, want the edit to succeed", err)
+	}
+	if !strings.HasPrefix(string(out), "v = nan\nw = [nan]\n") {
+		t.Fatalf("bytes outside the edit changed:\n%s", out)
+	}
+}
+
+// Re-review P2-4: comments inside a multi-line args array were dropped by the one-line rewrite.
+func TestCodexArgsWithCommentsUnsupported(t *testing.T) {
+	src := "[mcp_servers.s]\ncommand = \"node\"\nargs = [ # entry\n  \"srv.js\", # main\n]\n"
+	if _, err := CodexSetArgv([]byte(src), "s", []string{"/b/mcp-snooze", "--", "node", "srv.js"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}

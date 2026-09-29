@@ -55,14 +55,12 @@ func multilineState(s string, quote byte) byte {
 	return quote
 }
 
-func hasTripleString(s string) bool {
+// notRewritable reports a value we cannot replace faithfully: one holding a triple-quoted
+// string, or a multi-line array with comments that a one-line rewrite would drop.
+func notRewritable(s string) bool {
 	for i := 0; i < len(s); {
 		if s[i] == '#' {
-			if n := strings.IndexByte(s[i:], '\n'); n >= 0 {
-				i += n + 1
-				continue
-			}
-			return false
+			return true
 		}
 		if s[i] != '"' && s[i] != '\'' {
 			i++
@@ -182,10 +180,10 @@ func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if hasTripleString(t[c[2]:c[3]]) {
+	if notRewritable(t[c[2]:c[3]]) {
 		return nil, ErrUnsupported
 	}
-	if a, ok := tab["args"]; ok && hasTripleString(t[a[2]:a[3]]) {
+	if a, ok := tab["args"]; ok && notRewritable(t[a[2]:a[3]]) {
 		return nil, ErrUnsupported
 	}
 	edits := []edit{{c[2], c[3], quote(argv[0])}}
