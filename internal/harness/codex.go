@@ -7,7 +7,80 @@ import (
 	"strings"
 )
 
-var errTODO = errors.New("not implemented")
+func multilineState(s string, quote byte) byte {
+	for i := 0; i < len(s); {
+		if quote != 0 {
+			if quote == '"' && s[i] == '\\' {
+				i++
+				if i < len(s) {
+					i++
+				}
+				continue
+			}
+			if i+2 < len(s) && s[i] == quote && s[i+1] == quote && s[i+2] == quote {
+				quote = 0
+				i += 3
+				continue
+			}
+			i++
+			continue
+		}
+		if s[i] == '#' {
+			break
+		}
+		if s[i] != '"' && s[i] != '\'' {
+			i++
+			continue
+		}
+		q := s[i]
+		if i+2 < len(s) && s[i+1] == q && s[i+2] == q {
+			quote = q
+			i += 3
+			continue
+		}
+		i++
+		for i < len(s) && s[i] != q && s[i] != '\n' && s[i] != '\r' {
+			if q == '"' && s[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i < len(s) && s[i] == q {
+			i++
+		}
+	}
+	return quote
+}
+func hasTripleString(s string) bool {
+	for i := 0; i < len(s); {
+		if s[i] == '#' {
+			if n := strings.IndexByte(s[i:], '\n'); n >= 0 {
+				i += n + 1
+				continue
+			}
+			return false
+		}
+		if s[i] != '"' && s[i] != '\'' {
+			i++
+			continue
+		}
+		q := s[i]
+		if i+2 < len(s) && s[i+1] == q && s[i+2] == q {
+			return true
+		}
+		i++
+		for i < len(s) && s[i] != q && s[i] != '\n' && s[i] != '\r' {
+			if q == '"' && s[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i < len(s) && s[i] == q {
+			i++
+		}
+	}
+	return false
+}
 
 type field [4]int
 type edit struct {
@@ -31,6 +104,12 @@ func CodexServers(src []byte) ([]Server, error) {
 		}
 		c, ok := tab["command"]
 		if !ok {
+			continue
+		}
+		if hasTripleString(t[c[2]:c[3]]) {
+			continue
+		}
+		if a, ok := tab["args"]; ok && hasTripleString(t[a[2]:a[3]]) {
 			continue
 		}
 		cmd, err := tomlString(t[c[2]:c[3]])
@@ -78,6 +157,12 @@ func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
+	if hasTripleString(t[c[2]:c[3]]) {
+		return nil, ErrUnsupported
+	}
+	if a, ok := tab["args"]; ok && hasTripleString(t[a[2]:a[3]]) {
+		return nil, ErrUnsupported
+	}
 	edits := []edit{{c[2], c[3], quote(argv[0])}}
 	if a, ok := tab["args"]; ok {
 		if len(argv) == 1 {
@@ -109,8 +194,14 @@ func CodexSetArgv(src []byte, name string, argv []string) ([]byte, error) {
 
 func scan(t string) (map[string]map[string]field, []string, error) {
 	tables, names, current := map[string]map[string]field{}, []string{}, ""
+	var multiline byte
 	for p := 0; p < len(t); {
 		end := lineEnd(t, p)
+		if multiline != 0 {
+			multiline = multilineState(t[p:end], multiline)
+			p = end
+			continue
+		}
 		line := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(t[p:end], "\n"), "\r"))
 		if strings.HasPrefix(line, "[") {
 			current = header(line)
@@ -127,15 +218,13 @@ func scan(t string) (map[string]map[string]field, []string, error) {
 					return nil, nil, err
 				}
 				next := lineEnd(t, last)
-				if key == "args" {
-					end = next
-				}
 				tables[current][key] = field{p, next, v, last}
-				if key == "args" {
+				if key == "args" || last > end {
 					end = next
 				}
 			}
 		}
+		multiline = multilineState(t[p:end], 0)
 		p = end
 	}
 	return tables, names, nil
@@ -223,6 +312,18 @@ func valueEnd(s string, p int) (int, error) {
 		return 0, errors.New("missing TOML value")
 	}
 	if s[p] == '"' || s[p] == '\'' {
+		if p+2 < len(s) && s[p+1] == s[p] && s[p+2] == s[p] {
+			for i := p + 3; i+2 < len(s); i++ {
+				if s[p] == '"' && s[i] == '\\' {
+					i++
+					continue
+				}
+				if s[i] == s[p] && s[i+1] == s[p] && s[i+2] == s[p] {
+					return i + 3, nil
+				}
+			}
+			return 0, errors.New("unterminated TOML string")
+		}
 		return quotedEnd(s, p)
 	}
 	if s[p] != '[' {
@@ -235,10 +336,21 @@ func valueEnd(s string, p int) (int, error) {
 		}
 		return end, nil
 	}
-	depth, q := 0, byte(0)
+	depth, q, triple := 0, byte(0), false
 	for i := p; i < len(s); i++ {
 		c := s[i]
 		if q != 0 {
+			if triple {
+				if q == '"' && c == '\\' {
+					i++
+					continue
+				}
+				if c == q && i+2 < len(s) && s[i+1] == q && s[i+2] == q {
+					q, triple = 0, false
+					i += 2
+				}
+				continue
+			}
 			if q == '"' && c == '\\' {
 				i++
 				continue
@@ -250,6 +362,10 @@ func valueEnd(s string, p int) (int, error) {
 		}
 		if c == '"' || c == '\'' {
 			q = c
+			triple = i+2 < len(s) && s[i+1] == c && s[i+2] == c
+			if triple {
+				i += 2
+			}
 			continue
 		}
 		if c == '#' {
