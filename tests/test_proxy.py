@@ -43,6 +43,7 @@ for line in sys.stdin:
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "fake", "version": "9.9.9"}}})
     elif meth == "tools/list":
+        time.sleep(float(os.environ.get("FAKE_SLOW_LIST", "0")))
         if os.environ.get("FAKE_FAIL_LIST"):
             send({"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": "not ready"}})
             continue
@@ -335,6 +336,30 @@ def main():
         finally:
             c.close()
     case("idle reap kills launcher grandchild", grandchild)
+
+    # 14 a descendant that left the process group (setsid daemon) but still holds stdout must not hang shutdown
+    def setsid_descendant():
+        fake = os.path.join(work, "fake.py")
+        daemon = f'"{sys.executable}" -c "import os,time; os.setsid(); time.sleep(30)" &'
+        c = Client(work, cache, server=["/bin/sh", "-c", f'{daemon} exec "{sys.executable}" "{fake}"'])
+        c.handshake()
+        r = c.call(96, "tools/call", {"name": "echo", "arguments": {}})
+        assert "result" in r, r
+        t0 = time.time()
+        c.close()  # asserts exit within 5s of stdin EOF
+        assert time.time() - t0 < 5, "shutdown waited for the setsid descendant"
+    case("setsid descendant does not hang shutdown", setsid_descendant)
+
+    # 15 --idle shorter than the cold start must not kill the child mid-initialize
+    def idle_shorter_than_cold_start():
+        cache3 = os.path.join(work, "cache-slow")
+        c = Client(work, cache3, env={"FAKE_SLOW_LIST": "2"}, args=("--idle", "0.3"))
+        try:
+            r = c.handshake()
+            assert "result" in r, f"cold initialize failed: {r}"
+        finally:
+            c.close()
+    case("idle reap does not interrupt cold start", idle_shorter_than_cold_start)
 
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0
