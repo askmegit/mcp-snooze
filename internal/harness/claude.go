@@ -27,15 +27,11 @@ func ClaudeServers(src []byte) ([]Server, error) {
 			if !ok {
 				continue
 			}
-			full := []string{command}
-			if args, ok := fields["args"].([]any); ok {
-				for _, value := range args {
-					if arg, ok := value.(string); ok {
-						full = append(full, arg)
-					}
-				}
+			args, ok := claudeArgs(fields)
+			if !ok {
+				continue
 			}
-			wrapped, flags, argv := SplitWrapped(full)
+			wrapped, flags, argv := SplitWrapped(append([]string{command}, args...))
 			servers = append(servers, Server{Harness: "claude", Scope: scope, Name: name, Argv: argv, Wrapped: wrapped, ProxyFlags: flags, Enabled: true})
 		}
 	}
@@ -79,6 +75,9 @@ func ClaudeSetArgv(src []byte, scope, name string, argv []string) ([]byte, error
 	}
 	if _, ok := claudeCommand(fields); !ok {
 		return nil, ErrNotFound
+	}
+	if _, ok := claudeArgs(fields); !ok {
+		return nil, ErrUnsupported
 	}
 	fields["command"] = argv[0]
 	if len(argv) == 1 {
@@ -141,4 +140,24 @@ func claudeFields(root map[string]any, scope, name string) (map[string]any, bool
 		return fields, true
 	}
 	return nil, false
+}
+
+// claudeArgs returns the string args; ok is false when args holds anything but strings,
+// which we refuse to rewrite rather than silently drop.
+func claudeArgs(fields map[string]any) ([]string, bool) {
+	raw, present := fields["args"]
+	if !present {
+		return nil, true
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	args := make([]string, len(list))
+	for i, value := range list {
+		if args[i], ok = value.(string); !ok {
+			return nil, false
+		}
+	}
+	return args, true
 }
