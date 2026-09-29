@@ -85,7 +85,11 @@ def split(server):
 def main():
     fails = []
 
+    only = sys.argv[sys.argv.index("--case") + 1] if "--case" in sys.argv else None
+
     def case(name, fn):
+        if only and only not in name:
+            return
         try:
             fn()
             print(f"ok   {name}")
