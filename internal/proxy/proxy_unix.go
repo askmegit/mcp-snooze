@@ -58,5 +58,10 @@ func terminateProcess(proc *childProcess) {
 
 func notifySignals(ch chan<- os.Signal) func() {
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	// Without this a write to a client that has gone kills the process on the spot, skipping
+	// close() and orphaning the server. Once SIGPIPE is registered with Notify the write fails
+	// with EPIPE instead, and run() shuts down cleanly (os/signal: "SIGPIPE"). Notify rather than
+	// Ignore: an ignored signal would stay ignored in the server started by exec.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	return func() { signal.Stop(ch) }
 }

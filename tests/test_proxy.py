@@ -411,6 +411,46 @@ def main():
                 raise AssertionError("child left running after the proxy exited")
     case("a hung call at stdin EOF does not keep the proxy alive", hung_call_at_eof)
 
+    # 19 client dies (both pipes closed) with a reply still due: the proxy must not die of SIGPIPE
+    # and orphan the server; the trailing sleep keeps the server alive after its stdin closes
+    def client_dies_with_reply_due(keep_stdin=False):
+        fake = os.path.join(work, "fake.py")
+        p = subprocess.Popen([BIN, "--idle", str(IDLE), "--cache-dir", cache, "--",
+                              "sh", "-c", f'"{sys.executable}" "{fake}"; exec sleep 30'],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, bufsize=1, env=dict(os.environ, FAKE_DIR=work), cwd=work)
+        def ask(o):
+            p.stdin.write(json.dumps(o) + "\n")
+            p.stdin.flush()
+        ask({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+        p.stdout.readline()
+        ask({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "echo", "arguments": {}}})
+        p.stdout.readline()
+        group = os.getpgid(spawns(work)[-1])
+        ask({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "slow", "arguments": {"s": 0.3}}})
+        p.stdout.close()
+        if not keep_stdin:
+            p.stdin.close()
+        try:
+            p.wait(10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        end = time.time() + 6
+        while time.time() < end:
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.2)
+        else:
+            os.killpg(group, signal.SIGKILL)
+            raise AssertionError(f"server process group left running; proxy exit {p.returncode}")
+        assert p.returncode == 0, f"proxy exit {p.returncode} (-13 is SIGPIPE)"
+    case("client dying with a reply due does not orphan the server", client_dies_with_reply_due)
+    # 20 same with stdin still open: only the failed write tells the proxy the client is gone
+    case("closed client output alone shuts the proxy down", lambda: client_dies_with_reply_due(keep_stdin=True))
+
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0
 

@@ -74,6 +74,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		servers:      make(map[string]*childProcess),
 		internal:     make(map[string]*internalRequest),
 		stopCh:       make(chan struct{}),
+		clientGone:   make(chan struct{}),
 	}
 	p.pendingEmpty = sync.NewCond(&p.mu)
 	return p.run()
@@ -98,7 +99,9 @@ type proxy struct {
 	cacheWrite   sync.Mutex
 	closeOnce    sync.Once
 	handlers     sync.WaitGroup // request goroutines; stdin EOF waits for their replies
-	pendingEmpty *sync.Cond     // signalled on p.mu when the last forwarded request is answered or dropped
+	clientGone   chan struct{}  // closed once a write to the client fails
+	goneOnce     sync.Once
+	pendingEmpty *sync.Cond // signalled on p.mu when the last forwarded request is answered or dropped
 	child        *childProcess
 	starting     *startAttempt
 	initSeen     bool
@@ -174,11 +177,15 @@ func (p *proxy) run() int {
 				case <-drained:
 				case <-signals:
 				case <-time.After(eofGrace):
+				case <-p.clientGone:
 				}
 				p.close()
 				return 0
 			}
 		case <-signals:
+			p.close()
+			return 0
+		case <-p.clientGone:
 			p.close()
 			return 0
 		}
@@ -222,6 +229,7 @@ func (p *proxy) writeLine(line string) {
 	}
 	if _, err := io.WriteString(p.stdout, line); err != nil {
 		fmt.Fprintf(p.stderr, "mcp-snooze: write client output: %v\n", err)
+		p.goneOnce.Do(func() { close(p.clientGone) })
 	}
 }
 
