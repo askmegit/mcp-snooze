@@ -112,20 +112,20 @@ The plugin drives the same `mcp-snooze` binary, so you still need it on your `PA
 
 ## How it compares
 
-From a survey of existing projects (repository READMEs and issues, checked 2026-09-29). "not stated" means the project's own material does not say.
+From a survey of existing projects (their READMEs, docs and source, checked 2026-09-30). "not stated" means the project's own material does not say.
 
 | project | lazy start | idle reap | keeps real tool names | config rewrite | notes |
 |---|---|---|---|---|---|
 | mcp-snooze | first `tools/call` | yes | yes | yes (Claude Code, Codex) | one proxy per server, no shared daemon |
-| mcp-lazy (PeterCha90) | first call through a meta-tool | not stated | no, 2 meta-tools | yes (`add --cursor` etc.) | targets context tokens |
-| mcp-lazy-proxy (sarthakpranesh) | on first use | yes, 5 min | no, 2 meta-tools | not stated | |
-| lazy-mcp (voicetreelab) | via meta-tools | not documented | no, meta-tools | not stated | targets context tokens |
-| 1mcp-app/agent | lazy mode defers schemas only | no | not stated | not stated | README: lazy loading "does not reduce backend connections or processes" |
-| mcp-proxy (sparfenyuk) | no | no | yes | no | stdio to SSE / HTTP transport bridge |
-| docker/mcp-gateway | not stated | not stated | not stated | no | dynamic, session-scoped server adds |
+| [mcp-lazy-load](https://github.com/PeterCha90/mcp-lazy-load) (npm `mcp-lazy`) | first call through a meta-tool | no | no, 2 meta-tools | yes (`add --cursor` etc.) | targets context tokens |
+| [mcp-lazy-proxy](https://github.com/sarthakpranesh/mcp-lazy-proxy) | on first use | yes, 5 min | no by default (2 meta-tools); yes for backends marked `favorite` | not stated | |
+| [lazy-mcp](https://github.com/voicetreelab/lazy-mcp) | via meta-tools | no | no, meta-tools | not stated | targets context tokens |
+| [1mcp-app/agent](https://github.com/1mcp-app/agent) | lazy mode defers schemas only | template servers only (`idleTimeout`, default 5 min); static servers stay resident | yes by default; no in lazy mode (`tool_list` / `tool_schema` / `tool_invoke`) | yes (`1mcp app consolidate`, with backups) | shared `1mcp serve` daemon; README: lazy loading "does not reduce backend connections or processes" |
+| [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) | no | no | yes | no | stdio to SSE / HTTP transport bridge |
+| [docker/mcp-gateway](https://github.com/docker/mcp-gateway) | yes by default: a container per call, released after (`--long-lived` / `--static` keep them running) | stops after each call by default; no idle timer found | not stated | yes (`docker mcp client connect <client>`) | runs servers as containers; dynamic `mcp-add` / `mcp-find` tools behind a feature flag |
 | Claude Code `MCP_DISCOVERY_CACHE=1` | see note below | no | yes | n/a | Claude Code only |
 
-The survey found no project that keeps real tool names, starts on first call, reaps on idle and answers lists from a cache. It was a small sample, not an exhaustive search.
+The survey found no general-purpose MCP wrapper that keeps real tool names, starts on first call, reaps on idle and answers lists from a cache. One narrow exception, [cua-mcp-lazy](https://github.com/jasoncodes/cua-mcp-lazy), does all four for the Cua Driver server only. It was a small sample, not an exhaustive search.
 
 Claude Code has an env var `MCP_DISCOVERY_CACHE=1`. In our test with `claude -p` it still spawned stdio servers on every run. We did not test interactive mode, and this is an observation about that setup, not a claim about Claude Code in general.
 
@@ -148,7 +148,7 @@ Claude Code has an env var `MCP_DISCOVERY_CACHE=1`. In our test with `claude -p`
 - `unwrap` of a Codex server whose original config had `args = []` removes the `args` line instead of restoring the empty array. Codex treats the two the same.
 - Changing `--idle` on an already wrapped server needs `unwrap` and then `wrap --idle N`.
 - `scan` matches processes to servers by command line via `ps`; per-server memory is a best-effort figure.
-- The MCP spec dated 2026-07-28 removes the `initialize` handshake. The replay-based design here targets the current handshake; support for the new spec is on the roadmap.
+- MCP spec revision 2026-07-28 removes the `initialize` handshake in favor of per-request `_meta` and `server/discover`. mcp-snooze replays the `initialize` handshake of earlier revisions. It answers `server/discover` with an error, which is what makes clients that support both revisions fall back to `initialize`. Clients that only speak 2026-07-28 are not supported yet; native support is on the roadmap.
 
 ## Development
 
