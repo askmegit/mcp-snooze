@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/askmegit/mcp-snooze/internal/harness"
 	"github.com/askmegit/mcp-snooze/internal/proxy"
@@ -23,9 +24,18 @@ func run(args []string) int {
 		case "unwrap":
 			return harness.Wrap(args[1:], os.Stdout, os.Stderr, true)
 		case "version", "--version":
-			fmt.Println(version)
+			fmt.Println(buildVersion())
 			return 0
 		}
 	}
 	return proxy.Main(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// buildVersion is the release version injected by goreleaser, or the module version that
+// `go install ...@vX.Y.Z` records in the binary.
+func buildVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
 }
