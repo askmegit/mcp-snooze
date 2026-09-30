@@ -3,6 +3,9 @@
   "owner": {
     "name": "askmegit"
   },
+  "metadata": {
+    "description": "mcp-snooze: start stdio MCP servers on first tool call and stop them when idle."
+  },
   "plugins": [
     {
       "name": "mcp-snooze",
