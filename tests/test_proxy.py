@@ -11,6 +11,7 @@ assert only on protocol output and process facts.
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import tempfile
@@ -375,6 +376,40 @@ def main():
             finally:
                 c.close()
     case("reply written just before exit is delivered", reply_then_exit)
+
+    # 17 requests written just before stdin EOF still get their replies (warm cache, no child)
+    def replies_before_eof():
+        msgs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": "L", "method": "tools/list", "params": {}},
+                {"jsonrpc": "2.0", "id": 7, "method": "ping", "params": {}},
+                {"jsonrpc": "2.0", "id": 8, "method": "server/discover", "params": {}}]
+        stdin = "".join(json.dumps(m) + "\n" for m in msgs)
+        for _ in range(20):
+            p = subprocess.run([BIN, "--idle", str(IDLE), "--cache-dir", cache, "--",
+                                sys.executable, os.path.join(work, "fake.py")],
+                               input=stdin, capture_output=True, text=True, timeout=10,
+                               env=dict(os.environ, FAKE_DIR=work), cwd=work)
+            ids = {json.loads(l).get("id") for l in p.stdout.splitlines() if l.strip()}
+            assert ids >= {0, "L", 7, 8}, f"replies lost at EOF: got ids {ids}"
+    case("requests written just before stdin EOF are answered", replies_before_eof)
+
+    # 18 a call still running at stdin EOF (client gone, no SIGTERM coming) must not keep the proxy alive
+    def hung_call_at_eof():
+        c = Client(work, cache)
+        c.handshake()
+        c.call(95, "tools/call", {"name": "echo", "arguments": {}})
+        child = spawns(work)[-1]
+        c.send({"jsonrpc": "2.0", "id": 96, "method": "tools/call", "params": {"name": "slow", "arguments": {"s": 60}}})
+        time.sleep(0.3)
+        try:
+            c.close()  # asserts exit within 5s of stdin EOF
+        finally:
+            if alive(child):
+                os.kill(child, signal.SIGKILL)
+                raise AssertionError("child left running after the proxy exited")
+    case("a hung call at stdin EOF does not keep the proxy alive", hung_call_at_eof)
 
     print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
     return 1 if fails else 0

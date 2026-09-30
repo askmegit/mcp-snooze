@@ -75,6 +75,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		internal:     make(map[string]*internalRequest),
 		stopCh:       make(chan struct{}),
 	}
+	p.pendingEmpty = sync.NewCond(&p.mu)
 	return p.run()
 }
 
@@ -92,25 +93,27 @@ type proxy struct {
 	stdout       io.Writer
 	stderr       io.Writer
 
-	mu         sync.Mutex
-	writeMu    sync.Mutex
-	cacheWrite sync.Mutex
-	closeOnce  sync.Once
-	child      *childProcess
-	starting   *startAttempt
-	initSeen   bool
-	initReady  bool
-	initParams json.RawMessage
-	initResult json.RawMessage
-	cachePath  string
-	cache      *cacheFile
-	pending    map[string]pendingRequest
-	servers    map[string]*childProcess
-	internal   map[string]*internalRequest
-	serial     uint64
-	lastClient time.Time
-	stopping   bool
-	stopCh     chan struct{}
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	cacheWrite   sync.Mutex
+	closeOnce    sync.Once
+	handlers     sync.WaitGroup // request goroutines; stdin EOF waits for their replies
+	pendingEmpty *sync.Cond     // signalled on p.mu when the last forwarded request is answered or dropped
+	child        *childProcess
+	starting     *startAttempt
+	initSeen     bool
+	initReady    bool
+	initParams   json.RawMessage
+	initResult   json.RawMessage
+	cachePath    string
+	cache        *cacheFile
+	pending      map[string]pendingRequest
+	servers      map[string]*childProcess
+	internal     map[string]*internalRequest
+	serial       uint64
+	lastClient   time.Time
+	stopping     bool
+	stopCh       chan struct{}
 }
 
 type pendingRequest struct {
@@ -131,6 +134,11 @@ type startAttempt struct {
 	err    error
 }
 
+// eofGrace bounds how long replies are awaited after stdin EOF. The MCP stdio shutdown has the
+// client close stdin and then signal a server that does not exit, so a longer wait only helps
+// a client that is already gone.
+const eofGrace = 2 * time.Second
+
 func (p *proxy) run() int {
 	go p.idleLoop()
 	lines := make(chan inputLine)
@@ -150,6 +158,23 @@ func (p *proxy) run() int {
 				p.handle(item.line)
 			}
 			if item.err == io.EOF {
+				// Answer what the client already sent before exiting, for at most eofGrace: a client
+				// that was killed never sends the SIGTERM that would otherwise end a hung call.
+				drained := make(chan struct{})
+				go func() {
+					p.handlers.Wait()
+					p.mu.Lock()
+					for len(p.pending) > 0 {
+						p.pendingEmpty.Wait()
+					}
+					p.mu.Unlock()
+					close(drained)
+				}()
+				select {
+				case <-drained:
+				case <-signals:
+				case <-time.After(eofGrace):
+				}
 				p.close()
 				return 0
 			}
@@ -223,7 +248,8 @@ func (p *proxy) handle(line string) {
 	}
 	if hasID && method != "" {
 		p.touchClient()
-		go p.request(message, line)
+		p.handlers.Add(1)
+		go func() { defer p.handlers.Done(); p.request(message, line) }()
 		return
 	}
 	if !hasID && method == "notifications/initialized" {
@@ -253,7 +279,7 @@ func (p *proxy) handle(line string) {
 		var params map[string]json.RawMessage
 		_ = json.Unmarshal(message["params"], &params)
 		if requestID, ok := params["requestId"]; ok {
-			delete(p.pending, idKey(requestID))
+			p.dropPendingLocked(idKey(requestID))
 		}
 	}
 	proc := p.child
@@ -296,7 +322,9 @@ func (p *proxy) initialize(message map[string]json.RawMessage) {
 		return
 	}
 	id := append(json.RawMessage(nil), message["id"]...)
+	p.handlers.Add(1)
 	go func() {
+		defer p.handlers.Done()
 		_, result, err := p.ensure()
 		if err != nil {
 			p.writeJSON(errorResponse(id, err.Error()))
@@ -347,11 +375,19 @@ func (p *proxy) request(message map[string]json.RawMessage, line string) {
 	if !proc.send(line) {
 		p.mu.Lock()
 		_, owned := p.pending[token]
-		delete(p.pending, token)
+		p.dropPendingLocked(token)
 		p.mu.Unlock()
 		if owned {
 			p.writeJSON(errorResponse(id, "MCP server exited before request forwarding"))
 		}
+	}
+}
+
+// dropPendingLocked forgets a forwarded request and wakes the EOF drain once none are left.
+func (p *proxy) dropPendingLocked(key string) {
+	delete(p.pending, key)
+	if len(p.pending) == 0 {
+		p.pendingEmpty.Broadcast()
 	}
 }
 

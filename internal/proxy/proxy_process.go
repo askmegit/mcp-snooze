@@ -225,7 +225,7 @@ func (p *proxy) discard(proc *childProcess) {
 	for key, request := range p.pending {
 		if request.proc == proc {
 			failed = append(failed, request.id)
-			delete(p.pending, key)
+			p.dropPendingLocked(key)
 		}
 	}
 	for key, server := range p.servers {
@@ -260,7 +260,7 @@ func (p *proxy) childExited(proc *childProcess, exit error) {
 	for key, request := range p.pending {
 		if request.proc == proc {
 			failed = append(failed, request.id)
-			delete(p.pending, key)
+			p.dropPendingLocked(key)
 		}
 	}
 	for key, server := range p.servers {
@@ -360,7 +360,7 @@ func (p *proxy) handleChildLine(proc *childProcess, line string) {
 		p.mu.Lock()
 		request, ok := p.pending[token]
 		if ok && request.proc == proc {
-			delete(p.pending, token)
+			p.dropPendingLocked(token)
 			p.lastClient = time.Now()
 		}
 		active := p.child == proc
